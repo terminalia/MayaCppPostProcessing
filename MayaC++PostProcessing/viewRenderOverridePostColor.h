@@ -21,11 +21,10 @@ public:
 
     void releaseCustomShader();
 
-    // Setters & Getters for runtime state management
     void setInputTargetPtr(MHWRender::MRenderTarget* target);
     void setSecondaryInputTargetPtr(MHWRender::MRenderTarget* target);
     void setOutputTargetPtr(MHWRender::MRenderTarget* target);
-    void setShaderFilePath(const MString& path); // FIXED: Added missing setter path tracking
+    void setShaderFilePath(const MString& path);
     void setClearOverride(bool clear);
 
     void setIntensity(float val);
@@ -68,10 +67,7 @@ public:
     MStatus cleanup() override;
 
     MString uiName() const override { return mUIName; }
-
     MHWRender::MRenderTarget* getTargetHalfBlur() const;
-
-    // FIXED: Added public reload command mapping entry point
     void triggerShaderReload();
 
 protected:
@@ -79,6 +75,10 @@ protected:
 
     MString mUIName;
     std::vector<MHWRender::MRenderOperation*> mOwnedOperations;
+
+    // FIXED: Full-res tracking target allocations
+    MHWRender::MRenderOperation* mSceneRenderOp;
+    MHWRender::MRenderTarget* mTargetFullScene;
 
     MHWRender::MRenderTarget* mTargetHalf;
     MHWRender::MRenderTarget* mTargetQuarter;

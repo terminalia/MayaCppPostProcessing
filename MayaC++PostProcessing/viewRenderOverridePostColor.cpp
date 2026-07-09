@@ -33,25 +33,24 @@ MString getPluginDirectory()
 ColorPostProcessOverride::ColorPostProcessOverride(const MString& name)
     : MRenderOverride(name)
     , mUIName("MultiPass Bloom Effects")
+    , mSceneRenderOp(NULL), mTargetFullScene(NULL) // Keep safe null pointers
     , mTargetHalf(NULL), mTargetQuarter(NULL), mTargetEighth(NULL), mTargetQuarterBlur(NULL), mTargetHalfBlur(NULL)
 {
     MHWRender::MRenderer* theRenderer = MHWRender::MRenderer::theRenderer();
     if (!theRenderer) return;
 
+    // STABLE RESTORATION: Let Maya handle the base scene pass natively to prevent freezes
     theRenderer->getStandardViewportOperations(mOperations);
+
     MString pluginDir = getPluginDirectory();
     MString ext = (theRenderer->drawAPI() == MHWRender::kOpenGLCoreProfile) ? ".ogsfx" : ".fx";
     MString shaderPath = pluginDir + "/shaders/MultiPassBloom" + ext;
 
-    PostQuadRender* grayscaleOp = new PostQuadRender(kGrayscalePassName, pluginDir + "/shaders/GrayscaleEffect.fx", "GrayscaleTech");
-    grayscaleOp->setEnabled(false);
-    mOwnedOperations.push_back(grayscaleOp);
-    mOperations.insertAfter(MHWRender::MRenderOperation::kStandardSceneName, grayscaleOp);
-
+    // Create the passes and chain them cleanly after the main scene render step
     PostQuadRender* down1 = new PostQuadRender(kDownsample1PassName, shaderPath, "ThresholdDownsample");
     down1->setClearOverride(true);
     mOwnedOperations.push_back(down1);
-    mOperations.insertAfter(kGrayscalePassName, down1);
+    mOperations.insertAfter(MHWRender::MRenderOperation::kStandardSceneName, down1);
 
     PostQuadRender* down2 = new PostQuadRender(kDownsample2PassName, shaderPath, "StandardDownsample");
     down2->setClearOverride(true);
@@ -111,6 +110,7 @@ MStatus ColorPostProcessOverride::setup(const MString& dest) {
 
     releaseTargets();
 
+    // Allocate internal low-res extraction pyramid targets safely
     MHWRender::MRenderTargetDescription desc("_bloom_half", w / 2, h / 2, 1, MHWRender::kR16G16B16A16_FLOAT, 0, false);
     mTargetHalf = targetMgr->acquireRenderTarget(desc);
 
@@ -126,29 +126,33 @@ MStatus ColorPostProcessOverride::setup(const MString& dest) {
     desc.setName("_bloom_half_blur"); desc.setWidth(w / 2); desc.setHeight(h / 2);
     mTargetHalfBlur = targetMgr->acquireRenderTarget(desc);
 
-    PostQuadRender* d1 = (PostQuadRender*)mOwnedOperations[1];
+    // ROUTING: Down1 reads natively from the full-res scene buffer via nullptr evaluation rule
+    PostQuadRender* d1 = (PostQuadRender*)mOwnedOperations[0];
+    d1->setInputTargetPtr(NULL);
     d1->setOutputTargetPtr(mTargetHalf);
 
-    PostQuadRender* d2 = (PostQuadRender*)mOwnedOperations[2];
+    PostQuadRender* d2 = (PostQuadRender*)mOwnedOperations[1];
     d2->setInputTargetPtr(mTargetHalf);
     d2->setOutputTargetPtr(mTargetQuarter);
 
-    PostQuadRender* d3 = (PostQuadRender*)mOwnedOperations[3];
+    PostQuadRender* d3 = (PostQuadRender*)mOwnedOperations[2];
     d3->setInputTargetPtr(mTargetQuarter);
     d3->setOutputTargetPtr(mTargetEighth);
 
-    PostQuadRender* u1 = (PostQuadRender*)mOwnedOperations[4];
+    PostQuadRender* u1 = (PostQuadRender*)mOwnedOperations[3];
     u1->setInputTargetPtr(mTargetEighth);
     u1->setSecondaryInputTargetPtr(mTargetQuarter);
     u1->setOutputTargetPtr(mTargetQuarterBlur);
 
-    PostQuadRender* u2 = (PostQuadRender*)mOwnedOperations[5];
+    PostQuadRender* u2 = (PostQuadRender*)mOwnedOperations[4];
     u2->setInputTargetPtr(mTargetQuarterBlur);
     u2->setSecondaryInputTargetPtr(mTargetHalf);
     u2->setOutputTargetPtr(mTargetHalfBlur);
 
-    PostQuadRender* comp = (PostQuadRender*)mOwnedOperations[6];
+    // Composite reads the blurred target, background scene is assigned inside shader() method
+    PostQuadRender* comp = (PostQuadRender*)mOwnedOperations[5];
     comp->setInputTargetPtr(mTargetHalfBlur);
+    comp->setSecondaryInputTargetPtr(NULL); // Force native resolution fallback tracking
 
     return MRenderOverride::setup(dest);
 }
@@ -159,7 +163,6 @@ MHWRender::DrawAPI ColorPostProcessOverride::supportedDrawAPIs() const {
     return (MHWRender::kDirectX11 | MHWRender::kOpenGLCoreProfile);
 }
 
-// FIXED: Implemented multi-track unified runtime cloning engine logic
 void ColorPostProcessOverride::triggerShaderReload()
 {
     MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
@@ -170,8 +173,12 @@ void ColorPostProcessOverride::triggerShaderReload()
     originalPath += ext;
 
     MString finalPathToLoad = originalPath;
+    MString lowerPath = originalPath.toLowerCase();
 
-    if (originalPath.toLowerCase().rindexW(".fx") || originalPath.toLowerCase().rindexW(".ogsfx"))
+    bool endsWithFx = (lowerPath.rindexW(".fx") == (int)(lowerPath.length() - 3));
+    bool endsWithOgsfx = (lowerPath.rindexW(".ogsfx") == (int)(lowerPath.length() - 6));
+
+    if (endsWithFx || endsWithOgsfx)
     {
         MString tempPath = originalPath.substringW(0, originalPath.length() - ext.length());
         tempPath += "_temp_" + MString(std::to_string(GetTickCount()).c_str()) + ext;
@@ -181,8 +188,7 @@ void ColorPostProcessOverride::triggerShaderReload()
         }
     }
 
-    // Pass track remapping across bloom pipeline operations (Skipping index 0 - Grayscale)
-    for (size_t i = 1; i < mOwnedOperations.size(); ++i)
+    for (size_t i = 0; i < mOwnedOperations.size(); ++i)
     {
         PostQuadRender* quadOp = dynamic_cast<PostQuadRender*>(mOwnedOperations[i]);
         if (quadOp)
@@ -211,7 +217,6 @@ PostQuadRender::~PostQuadRender() {
         MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
         if (renderer && renderer->getShaderManager()) renderer->getShaderManager()->releaseShader(mShaderInstance);
     }
-    // Clean up temporary tracking shader tracks to preserve folder space cleanly
     if (mFxFilePath != mOriginalFxFilePath && mFxFilePath.indexW("_temp_") != -1) {
         DeleteFileA(mFxFilePath.asChar());
     }
@@ -220,7 +225,7 @@ PostQuadRender::~PostQuadRender() {
 void PostQuadRender::setInputTargetPtr(MHWRender::MRenderTarget* target) { mInputTargetPtr = target; }
 void PostQuadRender::setSecondaryInputTargetPtr(MHWRender::MRenderTarget* target) { mSecondaryInputTargetPtr = target; }
 void PostQuadRender::setOutputTargetPtr(MHWRender::MRenderTarget* target) { mOutputTargetPtr = target; mOutputTargetArray[0] = target; }
-void PostQuadRender::setShaderFilePath(const MString& path) { mFxFilePath = path; } // FIXED implementation
+void PostQuadRender::setShaderFilePath(const MString& path) { mFxFilePath = path; }
 void PostQuadRender::setClearOverride(bool clear) { mShouldClear = clear; }
 void PostQuadRender::setIntensity(float val) { mIntensity = val; }
 float PostQuadRender::intensity() const { return mIntensity; }
@@ -259,25 +264,21 @@ const MHWRender::MShaderInstance* PostQuadRender::shader()
             assignment.target = mInputTargetPtr;
         }
         else {
+            // FIXED: Safely binds the unblurred native viewport render here
             assignment.target = getInputTarget(MHWRender::MRenderOperation::kColorTargetName);
         }
         mShaderInstance->setParameter("gInputTex", assignment);
 
-        if (mSecondaryInputTargetPtr) {
+        // FIXED: Explicitly bind the clear full-res viewport target to the composite pass
+        if (mTechniqueName == "FinalComposite") {
+            MHWRender::MRenderTargetAssignment sceneAssignment;
+            sceneAssignment.target = getInputTarget(MHWRender::MRenderOperation::kColorTargetName);
+            mShaderInstance->setParameter("gSourceMipTex", sceneAssignment);
+        }
+        else if (mSecondaryInputTargetPtr) {
             MHWRender::MRenderTargetAssignment secAssignment;
             secAssignment.target = mSecondaryInputTargetPtr;
             mShaderInstance->setParameter("gSourceMipTex", secAssignment);
-        }
-        else {
-            MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
-            if (renderer) {
-                ColorPostProcessOverride* ovr = (ColorPostProcessOverride*)renderer->findRenderOverride("ColorPostProcessOverride");
-                if (ovr && mInputTargetPtr == ovr->getTargetHalfBlur()) {
-                    MHWRender::MRenderTargetAssignment secAssignment;
-                    secAssignment.target = getInputTarget(MHWRender::MRenderOperation::kAuxiliaryTargetName);
-                    mShaderInstance->setParameter("gSourceMipTex", secAssignment);
-                }
-            }
         }
 
         mShaderInstance->setParameter("gBloomIntensity", mIntensity);
