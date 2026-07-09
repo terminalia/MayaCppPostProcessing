@@ -4,6 +4,10 @@
 #define kGrayscaleFlagLong    "-grayscale"
 #define kBloomFlag            "-b"
 #define kBloomFlagLong        "-bloom"
+#define kIntensityFlag        "-i"
+#define kIntensityFlagLong    "-intensity"
+#define kGlowTrailFlag        "-gt"
+#define kGlowTrailFlagLong    "-glowTrail"
 #define kReloadFlag           "-r"
 #define kReloadFlagLong       "-reload"
 #define commandName           "postColor"
@@ -20,5 +24,7 @@ public:
 private:
     bool            grayscaleState;
     bool            bloomState;
+    double          intensityVal;
+    double          glowTrailVal;
     bool            shouldReload;
 };

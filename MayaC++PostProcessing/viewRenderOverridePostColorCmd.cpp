@@ -7,7 +7,9 @@
 #include "viewRenderOverridePostColorCmd.h"
 #include "viewRenderOverridePostColor.h"
 
-viewRenderOverridePostColorCmd::viewRenderOverridePostColorCmd() : grayscaleState(true), shouldReload(false) {}
+viewRenderOverridePostColorCmd::viewRenderOverridePostColorCmd()
+    : grayscaleState(false), bloomState(true), intensityVal(1.5), glowTrailVal(1.8), shouldReload(false) {
+}
 viewRenderOverridePostColorCmd::~viewRenderOverridePostColorCmd() {}
 
 void* viewRenderOverridePostColorCmd::creator()
@@ -20,6 +22,8 @@ MSyntax viewRenderOverridePostColorCmd::newSyntax()
     MSyntax syntax;
     syntax.addFlag(kGrayscaleFlag, kGrayscaleFlagLong, MSyntax::kBoolean);
     syntax.addFlag(kBloomFlag, kBloomFlagLong, MSyntax::kBoolean);
+    syntax.addFlag(kIntensityFlag, kIntensityFlagLong, MSyntax::kDouble);
+    syntax.addFlag(kGlowTrailFlag, kGlowTrailFlagLong, MSyntax::kDouble);
     syntax.addFlag(kReloadFlag, kReloadFlagLong, MSyntax::kNoArg);
     syntax.enableQuery(true);
     return syntax;
@@ -99,6 +103,50 @@ MStatus viewRenderOverridePostColorCmd::doIt(const MArgList& args)
             {
                 argData.getFlagArgument(kBloomFlag, 0, bloomState);
                 postColorOverride->mOperations[index]->setEnabled(bloomState);
+            }
+        }
+    }
+
+    // --- HANDLE INTENSITY FLAG ---
+    if (argData.isFlagSet(kIntensityFlag))
+    {
+        int index = postColorOverride->mOperations.indexOf(ColorPostProcessOverride::kBloomPassName);
+        if (index != -1)
+        {
+            PostQuadRender* bloomOp = (PostQuadRender*)postColorOverride->mOperations[index];
+            if (bloomOp)
+            {
+                if (isQuery)
+                {
+                    MPxCommand::setResult(bloomOp->intensity());
+                }
+                else
+                {
+                    argData.getFlagArgument(kIntensityFlag, 0, intensityVal);
+                    bloomOp->setIntensity((float)intensityVal);
+                }
+            }
+        }
+    }
+
+    // --- HANDLE GLOW TRAIL FLAG ---
+    if (argData.isFlagSet(kGlowTrailFlag))
+    {
+        int index = postColorOverride->mOperations.indexOf(ColorPostProcessOverride::kBloomPassName);
+        if (index != -1)
+        {
+            PostQuadRender* bloomOp = (PostQuadRender*)postColorOverride->mOperations[index];
+            if (bloomOp)
+            {
+                if (isQuery)
+                {
+                    MPxCommand::setResult(bloomOp->glowTrail());
+                }
+                else
+                {
+                    argData.getFlagArgument(kGlowTrailFlag, 0, glowTrailVal);
+                    bloomOp->setGlowTrail((float)glowTrailVal);
+                }
             }
         }
     }

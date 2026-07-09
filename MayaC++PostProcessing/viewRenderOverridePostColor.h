@@ -39,11 +39,21 @@ public:
     bool getInputTargetDescription(const MString& name, MHWRender::MRenderTargetDescription& description) override;
     void releaseCustomShader();
 
+    // Accessors for dynamic control over shader uniforms
+    void setIntensity(float val) { mIntensity = val; }
+    float intensity() const { return mIntensity; }
+
+    void setGlowTrail(float val) { mGlowTrail = val; }
+    float glowTrail() const { return mGlowTrail; }
+
 protected:
     MHWRender::MShaderInstance* mShaderInstance;
     MString mOriginalFxFilePath;
     MString mFxFilePath;
     MString mTechniqueName;
+
+    float mIntensity;
+    float mGlowTrail;
 };
 
 #endif
