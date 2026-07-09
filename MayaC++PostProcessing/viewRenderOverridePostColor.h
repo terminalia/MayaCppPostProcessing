@@ -36,9 +36,11 @@ public:
 
     int writableTargets(unsigned int& count) override;
     bool getInputTargetDescription(const MString& name, MHWRender::MRenderTargetDescription& description) override;
+    void releaseCustomShader();
 
 protected:
     MHWRender::MShaderInstance* mShaderInstance;
+    MString mOriginalFxFilePath;
     MString mFxFilePath;
     MString mTechniqueName;
 };

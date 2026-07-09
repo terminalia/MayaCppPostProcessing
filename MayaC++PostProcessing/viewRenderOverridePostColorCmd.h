@@ -2,6 +2,8 @@
 
 #define kGrayscaleFlag        "-g"
 #define kGrayscaleFlagLong    "-grayscale"
+#define kReloadFlag           "-r"
+#define kReloadFlagLong       "-reload"
 #define commandName           "postColor"
 
 class viewRenderOverridePostColorCmd : public MPxCommand
@@ -15,4 +17,5 @@ public:
     static void* creator();
 private:
     bool            grayscaleState;
+    bool            shouldReload;
 };

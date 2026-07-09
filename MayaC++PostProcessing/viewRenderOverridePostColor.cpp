@@ -80,6 +80,7 @@ MStatus ColorPostProcessOverride::cleanup()
 PostQuadRender::PostQuadRender(const MString& name, const MString& fxFilePath, const MString& technique)
     : MQuadRender(name)
     , mShaderInstance(NULL)
+    , mOriginalFxFilePath(fxFilePath)
     , mFxFilePath(fxFilePath)
     , mTechniqueName(technique)
 {
@@ -109,7 +110,54 @@ PostQuadRender::~PostQuadRender()
                 shaderMgr->releaseShader(mShaderInstance);
             }
         }
+
+        if (mFxFilePath != mOriginalFxFilePath)
+        {
+            DeleteFileA(mFxFilePath.asChar());
+        }
+
         mShaderInstance = NULL;
+    }
+}
+
+void PostQuadRender::releaseCustomShader()
+{
+    if (mShaderInstance)
+    {
+        MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
+        if (renderer && renderer->getShaderManager())
+        {
+            renderer->getShaderManager()->releaseShader(mShaderInstance);
+        }
+        mShaderInstance = NULL;
+    }
+
+    // --- GENERATE TRULY UNIQUE CACHE-BUSTING FILE ON DISK ---
+    int dotIndex = mOriginalFxFilePath.rindexW('.');
+    if (dotIndex != -1)
+    {
+        MString baseName = mOriginalFxFilePath.substringW(0, dotIndex - 1);
+        MString ext = mOriginalFxFilePath.substringW(dotIndex, mOriginalFxFilePath.length() - 1);
+
+        // Use the Windows tick count timestamp to ensure absolute uniqueness
+        unsigned long long timestamp = GetTickCount64();
+        MString timeStr;
+        timeStr.set((double)timestamp); // safely format into string
+
+        MString newCopyPath = baseName + "_temp_" + timeStr + ext;
+
+        // 1. Copy your freshly modified shader code to the new temporary destination
+        if (CopyFileA(mOriginalFxFilePath.asChar(), newCopyPath.asChar(), FALSE))
+        {
+            // 2. Delete the old temporary file to avoid leaving garbage behind
+            if (mFxFilePath != mOriginalFxFilePath)
+            {
+                DeleteFileA(mFxFilePath.asChar());
+            }
+
+            // 3. Swap the active filepath pointer to the new unique path name
+            mFxFilePath = newCopyPath;
+        }
     }
 }
 
@@ -124,7 +172,12 @@ const MHWRender::MShaderInstance* PostQuadRender::shader()
             if (shaderMgr)
             {
                 // Maya 2026 demands absolute path parameters to external files
-                mShaderInstance = shaderMgr->getEffectsFileShader(mFxFilePath.asChar(), mTechniqueName.asChar());
+                //mShaderInstance = shaderMgr->getEffectsFileShader(mFxFilePath.asChar(), mTechniqueName.asChar());
+                mShaderInstance = shaderMgr->getEffectsFileShader(
+                    mFxFilePath.asChar(),
+                    mTechniqueName.asChar(),
+                    NULL // Macros are no longer needed since the filepath itself is unique
+                );
             }
         }
     }
