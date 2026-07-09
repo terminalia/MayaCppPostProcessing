@@ -39,7 +39,7 @@ public:
     bool getInputTargetDescription(const MString& name, MHWRender::MRenderTargetDescription& description) override;
     void releaseCustomShader();
 
-    // Accessors for dynamic control over shader uniforms
+    // Uniform accessors for dynamic pipeline variation
     void setIntensity(float val) { mIntensity = val; }
     float intensity() const { return mIntensity; }
 

@@ -32,7 +32,7 @@ MString getPluginDirectory()
 
 ColorPostProcessOverride::ColorPostProcessOverride(const MString& name)
     : MRenderOverride(name)
-    , mUIName("Mistwork Post FX")
+    , mUIName("Color Post Effects")
 {
     MHWRender::MRenderer* theRenderer = MHWRender::MRenderer::theRenderer();
     if (!theRenderer) return;
@@ -41,14 +41,17 @@ ColorPostProcessOverride::ColorPostProcessOverride(const MString& name)
 
     MString pluginDir = getPluginDirectory();
 
-    // 1. Setup Grayscale Pass (Disabled by default)
+    // 1. Setup Grayscale Pass (HLSL Only - Disabled by default)
     MString grayscalePath = pluginDir + "/shaders/GrayscaleEffect.fx";
     PostQuadRender* grayscaleOp = new PostQuadRender(kGrayscalePassName, grayscalePath, "GrayscaleTech");
     grayscaleOp->setEnabled(false);
     mOperations.insertAfter(MHWRender::MRenderOperation::kStandardSceneName, grayscaleOp);
 
-    // 2. Setup Bloom Pass (Enabled by default)
-    MString bloomPath = pluginDir + "/shaders/BloomEffect.fx";
+    // 2. Setup Bloom Pass (Detects active graphics API layout)
+    MString ext = (theRenderer->drawAPI() == MHWRender::kOpenGLCoreProfile) ? ".ogsfx" : ".fx";
+    MString bloomPath = pluginDir + "/shaders/BloomEffect" + ext;
+
+
     PostQuadRender* bloomOp = new PostQuadRender(kBloomPassName, bloomPath, "BloomTech");
     bloomOp->setEnabled(true);
     mOperations.insertAfter(kGrayscalePassName, bloomOp);
@@ -58,7 +61,8 @@ ColorPostProcessOverride::~ColorPostProcessOverride() {}
 
 MHWRender::DrawAPI ColorPostProcessOverride::supportedDrawAPIs() const
 {
-    return MHWRender::kDirectX11;
+    // Enable support for both rendering pipelines simultaneously
+    return (MHWRender::kDirectX11 | MHWRender::kOpenGLCoreProfile);
 }
 
 MStatus ColorPostProcessOverride::setup(const MString& destination)
@@ -183,7 +187,7 @@ const MHWRender::MShaderInstance* PostQuadRender::shader()
             return NULL;
         }
 
-        // Forward parameters up to DX11 Effects uniforms dynamically
+        // Fixed overloaded type mapping binding calls
         mShaderInstance->setParameter("gBloomIntensity", mIntensity);
         mShaderInstance->setParameter("gGlowTrail", mGlowTrail);
     }
