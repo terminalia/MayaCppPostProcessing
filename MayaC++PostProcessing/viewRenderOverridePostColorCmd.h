@@ -2,6 +2,8 @@
 
 #define kGrayscaleFlag        "-g"
 #define kGrayscaleFlagLong    "-grayscale"
+#define kBloomFlag            "-b"
+#define kBloomFlagLong        "-bloom"
 #define kReloadFlag           "-r"
 #define kReloadFlagLong       "-reload"
 #define commandName           "postColor"
@@ -17,5 +19,6 @@ public:
     static void* creator();
 private:
     bool            grayscaleState;
+    bool            bloomState;
     bool            shouldReload;
 };

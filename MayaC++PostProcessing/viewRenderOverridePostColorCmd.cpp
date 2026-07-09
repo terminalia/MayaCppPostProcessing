@@ -19,6 +19,7 @@ MSyntax viewRenderOverridePostColorCmd::newSyntax()
 {
     MSyntax syntax;
     syntax.addFlag(kGrayscaleFlag, kGrayscaleFlagLong, MSyntax::kBoolean);
+    syntax.addFlag(kBloomFlag, kBloomFlagLong, MSyntax::kBoolean);
     syntax.addFlag(kReloadFlag, kReloadFlagLong, MSyntax::kNoArg);
     syntax.enableQuery(true);
     return syntax;
@@ -45,35 +46,60 @@ MStatus viewRenderOverridePostColorCmd::doIt(const MArgList& args)
     MArgDatabase argData(syntax(), args, &status);
     if (!status) return status;
 
-    int index = postColorOverride->mOperations.indexOf(ColorPostProcessOverride::kGrayscalePassName);
-    if (index == -1) return MStatus::kFailure;
-
-    PostQuadRender* quadOp = (PostQuadRender*)postColorOverride->mOperations[index];
-
     // --- HANDLE RELOAD FLAG ---
     if (argData.isFlagSet(kReloadFlag))
     {
-        if (quadOp)
+        int gIndex = postColorOverride->mOperations.indexOf(ColorPostProcessOverride::kGrayscalePassName);
+        if (gIndex != -1)
         {
-            quadOp->releaseCustomShader();
-            MGlobal::displayInfo("Grayscale shader cache cleared. Recompiling next frame...");
+            PostQuadRender* quadOp = (PostQuadRender*)postColorOverride->mOperations[gIndex];
+            if (quadOp) quadOp->releaseCustomShader();
         }
-    }
 
+        int bIndex = postColorOverride->mOperations.indexOf(ColorPostProcessOverride::kBloomPassName);
+        if (bIndex != -1)
+        {
+            PostQuadRender* quadOp = (PostQuadRender*)postColorOverride->mOperations[bIndex];
+            if (quadOp) quadOp->releaseCustomShader();
+        }
+        MGlobal::displayInfo("Post-processing shader cache cleared. Recompiling next frame...");
+    }
 
     bool isQuery = argData.isQuery();
 
+    // --- HANDLE GRAYSCALE FLAG ---
     if (argData.isFlagSet(kGrayscaleFlag))
     {
         int index = postColorOverride->mOperations.indexOf(ColorPostProcessOverride::kGrayscalePassName);
-        if (isQuery)
+        if (index != -1)
         {
-            MPxCommand::setResult(postColorOverride->mOperations[index]->enabled());
+            if (isQuery)
+            {
+                MPxCommand::setResult(postColorOverride->mOperations[index]->enabled());
+            }
+            else
+            {
+                argData.getFlagArgument(kGrayscaleFlag, 0, grayscaleState);
+                postColorOverride->mOperations[index]->setEnabled(grayscaleState);
+            }
         }
-        else
+    }
+
+    // --- HANDLE BLOOM FLAG ---
+    if (argData.isFlagSet(kBloomFlag))
+    {
+        int index = postColorOverride->mOperations.indexOf(ColorPostProcessOverride::kBloomPassName);
+        if (index != -1)
         {
-            argData.getFlagArgument(kGrayscaleFlag, 0, grayscaleState);
-            postColorOverride->mOperations[index]->setEnabled(grayscaleState);
+            if (isQuery)
+            {
+                MPxCommand::setResult(postColorOverride->mOperations[index]->enabled());
+            }
+            else
+            {
+                argData.getFlagArgument(kBloomFlag, 0, bloomState);
+                postColorOverride->mOperations[index]->setEnabled(bloomState);
+            }
         }
     }
 

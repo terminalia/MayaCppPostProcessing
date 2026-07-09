@@ -9,6 +9,7 @@ class ColorPostProcessOverride : public MHWRender::MRenderOverride
 {
 public:
     static const MString kGrayscalePassName;
+    static const MString kBloomPassName;
 
     ColorPostProcessOverride(const MString& name);
     ~ColorPostProcessOverride() override;

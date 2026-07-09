@@ -5,6 +5,7 @@
 #include <maya/MString.h>
 
 const MString ColorPostProcessOverride::kGrayscalePassName = "ColorPostProcessOverride_Grayscale";
+const MString ColorPostProcessOverride::kBloomPassName = "ColorPostProcessOverride_Bloom";
 
 MString getPluginDirectory()
 {
@@ -48,14 +49,19 @@ ColorPostProcessOverride::ColorPostProcessOverride(const MString& name)
     // Ensure you use forward slashes (/) for the absolute path path layout!
     //MString fxPath = "C:/MayaSDK/shaders/GrayscaleEffect.fx";
     MString pluginDir = getPluginDirectory();
+    
+    //GRAYSCALE
     MString fxPath = pluginDir + "/shaders/GrayscaleEffect.fx";
     MString techniqueName = "GrayscaleTech";
-
     PostQuadRender* grayscaleOp = new PostQuadRender(kGrayscalePassName, fxPath, techniqueName);
-    grayscaleOp->setEnabled(true); // Active by default
-
-    // Inject directly into the engine's execution order
+    grayscaleOp->setEnabled(false); 
     mOperations.insertAfter(MHWRender::MRenderOperation::kStandardSceneName, grayscaleOp);
+
+    //BLOOM
+    MString bloomPath = pluginDir + "/shaders/BloomEffect.fx";
+    PostQuadRender* bloomOp = new PostQuadRender(kBloomPassName, bloomPath, "BloomTech");
+    bloomOp->setEnabled(true); // Enabled by default
+    mOperations.insertAfter(kGrayscalePassName, bloomOp);
 }
 
 ColorPostProcessOverride::~ColorPostProcessOverride() {}
