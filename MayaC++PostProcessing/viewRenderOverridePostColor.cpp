@@ -32,7 +32,7 @@ MString getPluginDirectory()
 
 ColorPostProcessOverride::ColorPostProcessOverride(const MString& name)
     : MRenderOverride(name)
-    , mUIName("Color Post Effects")
+    , mUIName("Mistwork Post FX")
 {
     MHWRender::MRenderer* theRenderer = MHWRender::MRenderer::theRenderer();
     if (!theRenderer) return;
