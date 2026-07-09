@@ -17,15 +17,15 @@ public:
 
     const MHWRender::MShaderInstance* shader() override;
     MHWRender::MClearOperation& clearOperation() override;
-
-    // VERIFIED SDK METHOD: Correct signature for overriding targets in an MQuadRender operation
     MHWRender::MRenderTarget* const* targetOverrideList(unsigned int& listSize) override;
 
     void releaseCustomShader();
 
+    // Setters & Getters for runtime state management
     void setInputTargetPtr(MHWRender::MRenderTarget* target);
     void setSecondaryInputTargetPtr(MHWRender::MRenderTarget* target);
     void setOutputTargetPtr(MHWRender::MRenderTarget* target);
+    void setShaderFilePath(const MString& path); // FIXED: Added missing setter path tracking
     void setClearOverride(bool clear);
 
     void setIntensity(float val);
@@ -70,6 +70,9 @@ public:
     MString uiName() const override { return mUIName; }
 
     MHWRender::MRenderTarget* getTargetHalfBlur() const;
+
+    // FIXED: Added public reload command mapping entry point
+    void triggerShaderReload();
 
 protected:
     void releaseTargets();

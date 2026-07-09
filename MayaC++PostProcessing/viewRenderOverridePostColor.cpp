@@ -3,6 +3,7 @@
 #include <maya/MGlobal.h>
 #include <maya/MColor.h>
 #include <Windows.h>
+#include <string>
 
 const MString ColorPostProcessOverride::kGrayscalePassName = "ColorPostProcessOverride_Grayscale";
 const MString ColorPostProcessOverride::kDownsample1PassName = "ColorPostProcessOverride_Down1";
@@ -158,6 +159,42 @@ MHWRender::DrawAPI ColorPostProcessOverride::supportedDrawAPIs() const {
     return (MHWRender::kDirectX11 | MHWRender::kOpenGLCoreProfile);
 }
 
+// FIXED: Implemented multi-track unified runtime cloning engine logic
+void ColorPostProcessOverride::triggerShaderReload()
+{
+    MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
+    if (!renderer) return;
+
+    MString originalPath = getPluginDirectory() + "/shaders/MultiPassBloom";
+    MString ext = (renderer->drawAPI() == MHWRender::kOpenGLCoreProfile) ? ".ogsfx" : ".fx";
+    originalPath += ext;
+
+    MString finalPathToLoad = originalPath;
+
+    if (originalPath.toLowerCase().rindexW(".fx") || originalPath.toLowerCase().rindexW(".ogsfx"))
+    {
+        MString tempPath = originalPath.substringW(0, originalPath.length() - ext.length());
+        tempPath += "_temp_" + MString(std::to_string(GetTickCount()).c_str()) + ext;
+
+        if (CopyFileA(originalPath.asChar(), tempPath.asChar(), FALSE)) {
+            finalPathToLoad = tempPath;
+        }
+    }
+
+    // Pass track remapping across bloom pipeline operations (Skipping index 0 - Grayscale)
+    for (size_t i = 1; i < mOwnedOperations.size(); ++i)
+    {
+        PostQuadRender* quadOp = dynamic_cast<PostQuadRender*>(mOwnedOperations[i]);
+        if (quadOp)
+        {
+            quadOp->releaseCustomShader();
+            quadOp->setShaderFilePath(finalPathToLoad);
+        }
+    }
+
+    MGlobal::executeCommand("refresh -f");
+}
+
 // --- PostQuadRender Method Implementations ---
 
 PostQuadRender::PostQuadRender(const MString& name, const MString& fxFilePath, const MString& technique)
@@ -174,11 +211,16 @@ PostQuadRender::~PostQuadRender() {
         MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
         if (renderer && renderer->getShaderManager()) renderer->getShaderManager()->releaseShader(mShaderInstance);
     }
+    // Clean up temporary tracking shader tracks to preserve folder space cleanly
+    if (mFxFilePath != mOriginalFxFilePath && mFxFilePath.indexW("_temp_") != -1) {
+        DeleteFileA(mFxFilePath.asChar());
+    }
 }
 
 void PostQuadRender::setInputTargetPtr(MHWRender::MRenderTarget* target) { mInputTargetPtr = target; }
 void PostQuadRender::setSecondaryInputTargetPtr(MHWRender::MRenderTarget* target) { mSecondaryInputTargetPtr = target; }
 void PostQuadRender::setOutputTargetPtr(MHWRender::MRenderTarget* target) { mOutputTargetPtr = target; mOutputTargetArray[0] = target; }
+void PostQuadRender::setShaderFilePath(const MString& path) { mFxFilePath = path; } // FIXED implementation
 void PostQuadRender::setClearOverride(bool clear) { mShouldClear = clear; }
 void PostQuadRender::setIntensity(float val) { mIntensity = val; }
 float PostQuadRender::intensity() const { return mIntensity; }
@@ -193,7 +235,6 @@ void PostQuadRender::releaseCustomShader() {
     }
 }
 
-// VERIFIED SDK METHOD: Correct definition block matching the 2026 devkit multi-pass rules
 MHWRender::MRenderTarget* const* PostQuadRender::targetOverrideList(unsigned int& listSize) {
     if (mOutputTargetPtr) {
         listSize = 1;
