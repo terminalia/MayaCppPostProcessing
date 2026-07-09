@@ -15,8 +15,22 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="test.cpp">
+    <ClCompile Include="viewRenderOverridePostColor.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="viewRenderOverridePostColorCmd.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="viewRenderOverridePostColorMain.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="viewRenderOverridePostColor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="viewRenderOverridePostColorCmd.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
