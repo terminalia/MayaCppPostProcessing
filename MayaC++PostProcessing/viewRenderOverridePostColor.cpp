@@ -32,7 +32,7 @@ MString getPluginDirectory()
 
 ColorPostProcessOverride::ColorPostProcessOverride(const MString& name)
     : MRenderOverride(name)
-    , mUIName("Color Post Effects")
+    , mUIName("MistworkPostFX")
 {
     MHWRender::MRenderer* theRenderer = MHWRender::MRenderer::theRenderer();
     if (!theRenderer) return;
@@ -166,6 +166,8 @@ const MHWRender::MShaderInstance* PostQuadRender::shader()
             const MHWRender::MShaderManager* shaderMgr = renderer->getShaderManager();
             if (shaderMgr)
             {
+                MGlobal::displayInfo("[MistworkPostFX] Compiling operation pass target shader file: " + mFxFilePath);
+
                 mShaderInstance = shaderMgr->getEffectsFileShader(
                     mFxFilePath.asChar(),
                     mTechniqueName.asChar(),
