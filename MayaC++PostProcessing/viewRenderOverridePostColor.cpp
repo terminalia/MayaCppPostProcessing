@@ -1,27 +1,26 @@
 #include "viewRenderOverridePostColor.h"
 #include <maya/MShaderManager.h>
 #include <maya/MGlobal.h>
+#include <maya/MColor.h>
 #include <Windows.h>
-#include <maya/MString.h>
 
 const MString ColorPostProcessOverride::kGrayscalePassName = "ColorPostProcessOverride_Grayscale";
-const MString ColorPostProcessOverride::kBloomPassName = "ColorPostProcessOverride_Bloom";
+const MString ColorPostProcessOverride::kDownsample1PassName = "ColorPostProcessOverride_Down1";
+const MString ColorPostProcessOverride::kDownsample2PassName = "ColorPostProcessOverride_Down2";
+const MString ColorPostProcessOverride::kDownsample3PassName = "ColorPostProcessOverride_Down3";
+const MString ColorPostProcessOverride::kUpsample1PassName = "ColorPostProcessOverride_Up1";
+const MString ColorPostProcessOverride::kUpsample2PassName = "ColorPostProcessOverride_Up2";
+const MString ColorPostProcessOverride::kFinalCompositePassName = "ColorPostProcessOverride_FinalComposite";
 
 MString getPluginDirectory()
 {
     char path[256];
     HMODULE hm = NULL;
-
-    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        (LPCSTR)&getPluginDirectory, &hm))
-    {
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)&getPluginDirectory, &hm)) {
         GetModuleFileNameA(hm, path, sizeof(path));
-
         MString fullPath(path);
         int lastSlash = fullPath.rindexW('\\');
-        if (lastSlash != -1)
-        {
+        if (lastSlash != -1) {
             MString dir = fullPath.substringW(0, lastSlash);
             dir.substitute("\\", "/");
             return dir;
@@ -32,199 +31,225 @@ MString getPluginDirectory()
 
 ColorPostProcessOverride::ColorPostProcessOverride(const MString& name)
     : MRenderOverride(name)
-    , mUIName("MistworkPostFX")
+    , mUIName("MultiPass Bloom Effects")
+    , mTargetHalf(NULL), mTargetQuarter(NULL), mTargetEighth(NULL), mTargetQuarterBlur(NULL), mTargetHalfBlur(NULL)
 {
     MHWRender::MRenderer* theRenderer = MHWRender::MRenderer::theRenderer();
     if (!theRenderer) return;
 
-    MHWRender::MRenderer::theRenderer()->getStandardViewportOperations(mOperations);
-
+    theRenderer->getStandardViewportOperations(mOperations);
     MString pluginDir = getPluginDirectory();
+    MString ext = (theRenderer->drawAPI() == MHWRender::kOpenGLCoreProfile) ? ".ogsfx" : ".fx";
+    MString shaderPath = pluginDir + "/shaders/MultiPassBloom" + ext;
 
-    // 1. Setup Grayscale Pass (HLSL Only - Disabled by default)
-    MString grayscalePath = pluginDir + "/shaders/GrayscaleEffect.fx";
-    PostQuadRender* grayscaleOp = new PostQuadRender(kGrayscalePassName, grayscalePath, "GrayscaleTech");
+    PostQuadRender* grayscaleOp = new PostQuadRender(kGrayscalePassName, pluginDir + "/shaders/GrayscaleEffect.fx", "GrayscaleTech");
     grayscaleOp->setEnabled(false);
+    mOwnedOperations.push_back(grayscaleOp);
     mOperations.insertAfter(MHWRender::MRenderOperation::kStandardSceneName, grayscaleOp);
 
-    // 2. Setup Bloom Pass (Detects active graphics API layout)
-    MString ext = (theRenderer->drawAPI() == MHWRender::kOpenGLCoreProfile) ? ".ogsfx" : ".fx";
-    MString bloomPath = pluginDir + "/shaders/BloomEffect" + ext;
+    PostQuadRender* down1 = new PostQuadRender(kDownsample1PassName, shaderPath, "ThresholdDownsample");
+    down1->setClearOverride(true);
+    mOwnedOperations.push_back(down1);
+    mOperations.insertAfter(kGrayscalePassName, down1);
 
+    PostQuadRender* down2 = new PostQuadRender(kDownsample2PassName, shaderPath, "StandardDownsample");
+    down2->setClearOverride(true);
+    mOwnedOperations.push_back(down2);
+    mOperations.insertAfter(kDownsample1PassName, down2);
 
-    PostQuadRender* bloomOp = new PostQuadRender(kBloomPassName, bloomPath, "BloomTech");
-    bloomOp->setEnabled(true);
-    mOperations.insertAfter(kGrayscalePassName, bloomOp);
+    PostQuadRender* down3 = new PostQuadRender(kDownsample3PassName, shaderPath, "StandardDownsample");
+    down3->setClearOverride(true);
+    mOwnedOperations.push_back(down3);
+    mOperations.insertAfter(kDownsample2PassName, down3);
+
+    PostQuadRender* up1 = new PostQuadRender(kUpsample1PassName, shaderPath, "UpsampleBlend");
+    up1->setClearOverride(true);
+    mOwnedOperations.push_back(up1);
+    mOperations.insertAfter(kDownsample3PassName, up1);
+
+    PostQuadRender* up2 = new PostQuadRender(kUpsample2PassName, shaderPath, "UpsampleBlend");
+    up2->setClearOverride(true);
+    mOwnedOperations.push_back(up2);
+    mOperations.insertAfter(kUpsample1PassName, up2);
+
+    PostQuadRender* composite = new PostQuadRender(kFinalCompositePassName, shaderPath, "FinalComposite");
+    mOwnedOperations.push_back(composite);
+    mOperations.insertAfter(kUpsample2PassName, composite);
 }
 
-ColorPostProcessOverride::~ColorPostProcessOverride() {}
+ColorPostProcessOverride::~ColorPostProcessOverride() {
+    releaseTargets();
+    for (auto op : mOwnedOperations) delete op;
+}
 
-MHWRender::DrawAPI ColorPostProcessOverride::supportedDrawAPIs() const
-{
-    // Enable support for both rendering pipelines simultaneously
+MHWRender::MRenderTarget* ColorPostProcessOverride::getTargetHalfBlur() const {
+    return mTargetHalfBlur;
+}
+
+void ColorPostProcessOverride::releaseTargets() {
+    MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
+    if (!renderer) return;
+    const MHWRender::MRenderTargetManager* targetMgr = renderer->getRenderTargetManager();
+    if (!targetMgr) return;
+
+    if (mTargetHalf) { targetMgr->releaseRenderTarget(mTargetHalf); mTargetHalf = NULL; }
+    if (mTargetQuarter) { targetMgr->releaseRenderTarget(mTargetQuarter); mTargetQuarter = NULL; }
+    if (mTargetEighth) { targetMgr->releaseRenderTarget(mTargetEighth); mTargetEighth = NULL; }
+    if (mTargetQuarterBlur) { targetMgr->releaseRenderTarget(mTargetQuarterBlur); mTargetQuarterBlur = NULL; }
+    if (mTargetHalfBlur) { targetMgr->releaseRenderTarget(mTargetHalfBlur); mTargetHalfBlur = NULL; }
+}
+
+MStatus ColorPostProcessOverride::setup(const MString& dest) {
+    MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
+    if (!renderer) return MStatus::kFailure;
+    const MHWRender::MRenderTargetManager* targetMgr = renderer->getRenderTargetManager();
+    if (!targetMgr) return MStatus::kFailure;
+
+    unsigned int w = 1920, h = 1080;
+    renderer->outputTargetSize(w, h);
+
+    releaseTargets();
+
+    MHWRender::MRenderTargetDescription desc("_bloom_half", w / 2, h / 2, 1, MHWRender::kR16G16B16A16_FLOAT, 0, false);
+    mTargetHalf = targetMgr->acquireRenderTarget(desc);
+
+    desc.setName("_bloom_quarter"); desc.setWidth(w / 4); desc.setHeight(h / 4);
+    mTargetQuarter = targetMgr->acquireRenderTarget(desc);
+
+    desc.setName("_bloom_eighth"); desc.setWidth(w / 8); desc.setHeight(h / 8);
+    mTargetEighth = targetMgr->acquireRenderTarget(desc);
+
+    desc.setName("_bloom_quarter_blur"); desc.setWidth(w / 4); desc.setHeight(h / 4);
+    mTargetQuarterBlur = targetMgr->acquireRenderTarget(desc);
+
+    desc.setName("_bloom_half_blur"); desc.setWidth(w / 2); desc.setHeight(h / 2);
+    mTargetHalfBlur = targetMgr->acquireRenderTarget(desc);
+
+    PostQuadRender* d1 = (PostQuadRender*)mOwnedOperations[1];
+    d1->setOutputTargetPtr(mTargetHalf);
+
+    PostQuadRender* d2 = (PostQuadRender*)mOwnedOperations[2];
+    d2->setInputTargetPtr(mTargetHalf);
+    d2->setOutputTargetPtr(mTargetQuarter);
+
+    PostQuadRender* d3 = (PostQuadRender*)mOwnedOperations[3];
+    d3->setInputTargetPtr(mTargetQuarter);
+    d3->setOutputTargetPtr(mTargetEighth);
+
+    PostQuadRender* u1 = (PostQuadRender*)mOwnedOperations[4];
+    u1->setInputTargetPtr(mTargetEighth);
+    u1->setSecondaryInputTargetPtr(mTargetQuarter);
+    u1->setOutputTargetPtr(mTargetQuarterBlur);
+
+    PostQuadRender* u2 = (PostQuadRender*)mOwnedOperations[5];
+    u2->setInputTargetPtr(mTargetQuarterBlur);
+    u2->setSecondaryInputTargetPtr(mTargetHalf);
+    u2->setOutputTargetPtr(mTargetHalfBlur);
+
+    PostQuadRender* comp = (PostQuadRender*)mOwnedOperations[6];
+    comp->setInputTargetPtr(mTargetHalfBlur);
+
+    return MRenderOverride::setup(dest);
+}
+
+MStatus ColorPostProcessOverride::cleanup() { return MRenderOverride::cleanup(); }
+
+MHWRender::DrawAPI ColorPostProcessOverride::supportedDrawAPIs() const {
     return (MHWRender::kDirectX11 | MHWRender::kOpenGLCoreProfile);
 }
 
-MStatus ColorPostProcessOverride::setup(const MString& destination)
-{
-    return MRenderOverride::setup(destination);
-}
-
-MStatus ColorPostProcessOverride::cleanup()
-{
-    return MRenderOverride::cleanup();
-}
-
-// --- PostQuadRender Implementation ---
+// --- PostQuadRender Method Implementations ---
 
 PostQuadRender::PostQuadRender(const MString& name, const MString& fxFilePath, const MString& technique)
-    : MQuadRender(name)
-    , mShaderInstance(NULL)
-    , mOriginalFxFilePath(fxFilePath)
-    , mFxFilePath(fxFilePath)
-    , mTechniqueName(technique)
-    , mIntensity(1.5f)
-    , mGlowTrail(1.8f)
+    : MHWRender::MQuadRender(name)
+    , mShaderInstance(NULL), mOriginalFxFilePath(fxFilePath), mFxFilePath(fxFilePath)
+    , mTechniqueName(technique), mIntensity(1.5f), mGlowTrail(1.0f), mShouldClear(false)
+    , mInputTargetPtr(NULL), mSecondaryInputTargetPtr(NULL), mOutputTargetPtr(NULL)
 {
-    mInputTargetNames.clear();
-    mInputTargetNames.append(kAuxiliaryTargetName);
-    mInputTargetNames.append(kAuxiliaryDepthTargetName);
-    mInputTargetNames.append(kColorTargetName);
-    mInputTargetNames.append(kDepthTargetName);
-
-    mOutputTargetNames.clear();
-    mOutputTargetNames.append(kColorTargetName);
-    mOutputTargetNames.append(kDepthTargetName);
-    mOutputTargetNames.append(kAuxiliaryTargetName);
-    mOutputTargetNames.append(kAuxiliaryDepthTargetName);
+    mOutputTargetArray[0] = NULL;
 }
 
-PostQuadRender::~PostQuadRender()
-{
-    if (mShaderInstance)
-    {
+PostQuadRender::~PostQuadRender() {
+    if (mShaderInstance) {
         MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
-        if (renderer)
-        {
-            const MHWRender::MShaderManager* shaderMgr = renderer->getShaderManager();
-            if (shaderMgr)
-            {
-                shaderMgr->releaseShader(mShaderInstance);
-            }
-        }
+        if (renderer && renderer->getShaderManager()) renderer->getShaderManager()->releaseShader(mShaderInstance);
+    }
+}
 
-        if (mFxFilePath != mOriginalFxFilePath)
-        {
-            DeleteFileA(mFxFilePath.asChar());
-        }
+void PostQuadRender::setInputTargetPtr(MHWRender::MRenderTarget* target) { mInputTargetPtr = target; }
+void PostQuadRender::setSecondaryInputTargetPtr(MHWRender::MRenderTarget* target) { mSecondaryInputTargetPtr = target; }
+void PostQuadRender::setOutputTargetPtr(MHWRender::MRenderTarget* target) { mOutputTargetPtr = target; mOutputTargetArray[0] = target; }
+void PostQuadRender::setClearOverride(bool clear) { mShouldClear = clear; }
+void PostQuadRender::setIntensity(float val) { mIntensity = val; }
+float PostQuadRender::intensity() const { return mIntensity; }
+void PostQuadRender::setGlowTrail(float val) { mGlowTrail = val; }
+float PostQuadRender::glowTrail() const { return mGlowTrail; }
+
+void PostQuadRender::releaseCustomShader() {
+    if (mShaderInstance) {
+        MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
+        if (renderer && renderer->getShaderManager()) renderer->getShaderManager()->releaseShader(mShaderInstance);
         mShaderInstance = NULL;
     }
 }
 
-void PostQuadRender::releaseCustomShader()
-{
-    if (mShaderInstance)
-    {
-        MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
-        if (renderer && renderer->getShaderManager())
-        {
-            renderer->getShaderManager()->releaseShader(mShaderInstance);
-        }
-        mShaderInstance = NULL;
+// VERIFIED SDK METHOD: Correct definition block matching the 2026 devkit multi-pass rules
+MHWRender::MRenderTarget* const* PostQuadRender::targetOverrideList(unsigned int& listSize) {
+    if (mOutputTargetPtr) {
+        listSize = 1;
+        return mOutputTargetArray;
     }
-
-    int dotIndex = mOriginalFxFilePath.rindexW('.');
-    if (dotIndex != -1)
-    {
-        MString baseName = mOriginalFxFilePath.substringW(0, dotIndex - 1);
-        MString ext = mOriginalFxFilePath.substringW(dotIndex, mOriginalFxFilePath.length() - 1);
-
-        unsigned long long timestamp = GetTickCount64();
-        MString timeStr;
-        timeStr.set((double)timestamp);
-
-        MString newCopyPath = baseName + "_temp_" + timeStr + ext;
-
-        if (CopyFileA(mOriginalFxFilePath.asChar(), newCopyPath.asChar(), FALSE))
-        {
-            if (mFxFilePath != mOriginalFxFilePath)
-            {
-                DeleteFileA(mFxFilePath.asChar());
-            }
-            mFxFilePath = newCopyPath;
-        }
-    }
+    listSize = 0;
+    return NULL;
 }
 
 const MHWRender::MShaderInstance* PostQuadRender::shader()
 {
-    if (mShaderInstance == NULL)
-    {
+    if (mShaderInstance == NULL) {
         MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
-        if (renderer)
-        {
-            const MHWRender::MShaderManager* shaderMgr = renderer->getShaderManager();
-            if (shaderMgr)
-            {
-                MGlobal::displayInfo("[MistworkPostFX] Compiling operation pass target shader file: " + mFxFilePath);
-
-                mShaderInstance = shaderMgr->getEffectsFileShader(
-                    mFxFilePath.asChar(),
-                    mTechniqueName.asChar(),
-                    NULL
-                );
-            }
+        if (renderer && renderer->getShaderManager()) {
+            mShaderInstance = renderer->getShaderManager()->getEffectsFileShader(mFxFilePath.asChar(), mTechniqueName.asChar(), NULL);
         }
     }
 
-    if (mShaderInstance)
-    {
+    if (mShaderInstance) {
         MHWRender::MRenderTargetAssignment assignment;
-        assignment.target = getInputTarget(kColorTargetName);
+        if (mInputTargetPtr) {
+            assignment.target = mInputTargetPtr;
+        }
+        else {
+            assignment.target = getInputTarget(MHWRender::MRenderOperation::kColorTargetName);
+        }
+        mShaderInstance->setParameter("gInputTex", assignment);
 
-        MStatus status = mShaderInstance->setParameter("gInputTex", assignment);
-        if (status != MStatus::kSuccess)
-        {
-            MGlobal::displayError("Failed mapping current viewport swapchain texture to 'gInputTex'.");
-            return NULL;
+        if (mSecondaryInputTargetPtr) {
+            MHWRender::MRenderTargetAssignment secAssignment;
+            secAssignment.target = mSecondaryInputTargetPtr;
+            mShaderInstance->setParameter("gSourceMipTex", secAssignment);
+        }
+        else {
+            MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
+            if (renderer) {
+                ColorPostProcessOverride* ovr = (ColorPostProcessOverride*)renderer->findRenderOverride("ColorPostProcessOverride");
+                if (ovr && mInputTargetPtr == ovr->getTargetHalfBlur()) {
+                    MHWRender::MRenderTargetAssignment secAssignment;
+                    secAssignment.target = getInputTarget(MHWRender::MRenderOperation::kAuxiliaryTargetName);
+                    mShaderInstance->setParameter("gSourceMipTex", secAssignment);
+                }
+            }
         }
 
-        // Fixed overloaded type mapping binding calls
         mShaderInstance->setParameter("gBloomIntensity", mIntensity);
         mShaderInstance->setParameter("gGlowTrail", mGlowTrail);
     }
-
     return mShaderInstance;
-}
-
-bool PostQuadRender::getInputTargetDescription(const MString& name, MHWRender::MRenderTargetDescription& description)
-{
-    if (name == kColorTargetName)
-    {
-        MHWRender::MRenderTarget* outTarget = getInputTarget(kAuxiliaryTargetName);
-        if (outTarget) outTarget->targetDescription(description);
-        description.setName("_post_effects_target");
-        return true;
-    }
-    else if (name == kDepthTargetName)
-    {
-        MHWRender::MRenderTarget* outTarget = getInputTarget(kAuxiliaryDepthTargetName);
-        if (outTarget) outTarget->targetDescription(description);
-        description.setName("_post_effects_depth");
-        return true;
-    }
-    return false;
-}
-
-int PostQuadRender::writableTargets(unsigned int& count)
-{
-    count = 2;
-    return 0;
 }
 
 MHWRender::MClearOperation& PostQuadRender::clearOperation()
 {
     mClearOperation.setClearGradient(false);
-    mClearOperation.setMask((unsigned int)MHWRender::MClearOperation::kClearNone);
+    mClearOperation.setMask(mShouldClear ? (unsigned int)MHWRender::MClearOperation::kClearColor : (unsigned int)MHWRender::MClearOperation::kClearNone);
+    float clearColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    mClearOperation.setClearColor(clearColor);
     return mClearOperation;
 }
