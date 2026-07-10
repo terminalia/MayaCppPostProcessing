@@ -4,27 +4,10 @@
 #include <maya/MString.h>
 #include <maya/MViewport2Renderer.h>
 #include <maya/MRenderTargetManager.h>
+#include <vector>
 
-class ColorPostProcessOverride : public MHWRender::MRenderOverride
-{
-public:
-    static const MString kGrayscalePassName;
-    static const MString kBloomPassName;
-
-    ColorPostProcessOverride(const MString& name);
-    ~ColorPostProcessOverride() override;
-    MHWRender::DrawAPI supportedDrawAPIs() const override;
-
-    MStatus setup(const MString& destination) override;
-    MStatus cleanup() override;
-
-    MString uiName() const override { return mUIName; }
-
-protected:
-    MString mUIName;
-
-    friend class viewRenderOverridePostColorCmd;
-};
+class PostQuadRender;
+class ColorPostProcessOverride;
 
 class PostQuadRender : public MHWRender::MQuadRender
 {
@@ -34,16 +17,76 @@ public:
 
     const MHWRender::MShaderInstance* shader() override;
     MHWRender::MClearOperation& clearOperation() override;
+    MHWRender::MRenderTarget* const* targetOverrideList(unsigned int& listSize) override;
 
-    int writableTargets(unsigned int& count) override;
-    bool getInputTargetDescription(const MString& name, MHWRender::MRenderTargetDescription& description) override;
     void releaseCustomShader();
+
+    void setInputTargetPtr(MHWRender::MRenderTarget* target);
+    void setSecondaryInputTargetPtr(MHWRender::MRenderTarget* target);
+    void setOutputTargetPtr(MHWRender::MRenderTarget* target);
+    void setShaderFilePath(const MString& path);
+    void setClearOverride(bool clear);
+
+    void setIntensity(float val);
+    float intensity() const;
+    void setGlowTrail(float val);
+    float glowTrail() const;
 
 protected:
     MHWRender::MShaderInstance* mShaderInstance;
     MString mOriginalFxFilePath;
     MString mFxFilePath;
     MString mTechniqueName;
+
+    float mIntensity;
+    float mGlowTrail;
+    bool mShouldClear;
+
+    MHWRender::MRenderTarget* mInputTargetPtr;
+    MHWRender::MRenderTarget* mSecondaryInputTargetPtr;
+    MHWRender::MRenderTarget* mOutputTargetPtr;
+    MHWRender::MRenderTarget* mOutputTargetArray[1];
+};
+
+class ColorPostProcessOverride : public MHWRender::MRenderOverride
+{
+public:
+    static const MString kGrayscalePassName;
+    static const MString kDownsample1PassName;
+    static const MString kDownsample2PassName;
+    static const MString kDownsample3PassName;
+    static const MString kUpsample1PassName;
+    static const MString kUpsample2PassName;
+    static const MString kFinalCompositePassName;
+
+    ColorPostProcessOverride(const MString& name);
+    ~ColorPostProcessOverride() override;
+    MHWRender::DrawAPI supportedDrawAPIs() const override;
+
+    MStatus setup(const MString& destination) override;
+    MStatus cleanup() override;
+
+    MString uiName() const override { return mUIName; }
+    MHWRender::MRenderTarget* getTargetHalfBlur() const;
+    void triggerShaderReload();
+
+protected:
+    void releaseTargets();
+
+    MString mUIName;
+    std::vector<MHWRender::MRenderOperation*> mOwnedOperations;
+
+    // FIXED: Full-res tracking target allocations
+    MHWRender::MRenderOperation* mSceneRenderOp;
+    MHWRender::MRenderTarget* mTargetFullScene;
+
+    MHWRender::MRenderTarget* mTargetHalf;
+    MHWRender::MRenderTarget* mTargetQuarter;
+    MHWRender::MRenderTarget* mTargetEighth;
+    MHWRender::MRenderTarget* mTargetQuarterBlur;
+    MHWRender::MRenderTarget* mTargetHalfBlur;
+
+    friend class viewRenderOverridePostColorCmd;
 };
 
 #endif
