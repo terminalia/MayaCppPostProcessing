@@ -1,7 +1,6 @@
 #include <maya/MIOStream.h>
 #include <cstdlib>
 #include <maya/MFnPlugin.h>
-#include <maya/MGlobal.h> // <-- ADD THIS INCLUDE
 #include "viewRenderOverridePostColor.h"
 #include "viewRenderOverridePostColorCmd.h"
 
@@ -13,23 +12,6 @@ MStatus initializePlugin(MObject obj)
     MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
     if (renderer)
     {
-        // --- ADD LOGGING FOR THE ACTIVE VIEWPORT 2.0 API ---
-        MString apiName = "Unknown API";
-        switch (renderer->drawAPI())
-        {
-        case MHWRender::kDirectX11:
-            apiName = "DirectX 11";
-            break;
-        case MHWRender::kOpenGLCoreProfile:
-            apiName = "OpenGL Core Profile (Strict)";
-            break;
-        default:
-            apiName = "Other/Unsupported Profile";
-            break;
-        }
-        MGlobal::displayInfo("[MistworkPostFX] MistworkPostFX Loaded successfully. Viewport 2.0 Active API: " + apiName);
-        // --------------------------------------------------
-
         ColorPostProcessOverride* overridePtr = new ColorPostProcessOverride("ColorPostProcessOverride");
         if (overridePtr)
         {
@@ -58,7 +40,6 @@ MStatus uninitializePlugin(MObject obj)
             delete overridePtr;
         }
         plugin.deregisterCommand(commandName);
-        MGlobal::displayInfo("[PostColorPlugin] Unloaded successfully.");
     }
     return status;
 }

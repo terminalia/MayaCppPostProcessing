@@ -1,155 +1,112 @@
-#include "viewRenderOverridePostColor.h"
-#include <maya/MGlobal.h>
-#include <maya/MArgDatabase.h>
 #include <maya/MSyntax.h>
-#include <maya/MPxCommand.h>
+#include <maya/MViewport2Renderer.h>
+#include <maya/MArgDatabase.h>
+#include <maya/MGlobal.h>
+#include <maya/M3dView.h>
 
-class viewRenderOverridePostColorCmd : public MPxCommand
-{
-public:
-    viewRenderOverridePostColorCmd() {}
-    ~viewRenderOverridePostColorCmd() override {}
+#include "viewRenderOverridePostColorCmd.h"
+#include "viewRenderOverridePostColor.h"
 
-    MStatus doIt(const MArgList& args) override;
-
-    static MSyntax newSyntax();
-    static void* creator();
-
-private:
-    static const char* kReloadShortFlag;
-    static const char* kReloadLongFlag;
-    static const char* kIntensityShortFlag;
-    static const char* kIntensityLongFlag;
-    static const char* kGlowTrailShortFlag;
-    static const char* kGlowTrailLongFlag;
-
-    // FIXED: Added tracking flags for Bloom Enable state
-    static const char* kBloomShortFlag;
-    static const char* kBloomLongFlag;
-};
-
-const char* viewRenderOverridePostColorCmd::kReloadShortFlag = "-rl";
-const char* viewRenderOverridePostColorCmd::kReloadLongFlag = "-reload";
-const char* viewRenderOverridePostColorCmd::kIntensityShortFlag = "-i";
-const char* viewRenderOverridePostColorCmd::kIntensityLongFlag = "-intensity";
-const char* viewRenderOverridePostColorCmd::kGlowTrailShortFlag = "-gt";
-const char* viewRenderOverridePostColorCmd::kGlowTrailLongFlag = "-glowTrail";
-const char* viewRenderOverridePostColorCmd::kBloomShortFlag = "-b";
-const char* viewRenderOverridePostColorCmd::kBloomLongFlag = "-bloom";
+viewRenderOverridePostColorCmd::viewRenderOverridePostColorCmd() : grayscaleState(true), shouldReload(false) {}
+viewRenderOverridePostColorCmd::~viewRenderOverridePostColorCmd() {}
 
 void* viewRenderOverridePostColorCmd::creator()
 {
-    return new viewRenderOverridePostColorCmd();
+    return (void*)(new viewRenderOverridePostColorCmd);
 }
 
 MSyntax viewRenderOverridePostColorCmd::newSyntax()
 {
     MSyntax syntax;
-
-    // Enable global query and edit switches natively in the command syntax core
+    syntax.addFlag(kGrayscaleFlag, kGrayscaleFlagLong, MSyntax::kBoolean);
+    syntax.addFlag(kBloomFlag, kBloomFlagLong, MSyntax::kBoolean);
+    syntax.addFlag(kReloadFlag, kReloadFlagLong, MSyntax::kNoArg);
     syntax.enableQuery(true);
-    syntax.enableEdit(false); // We handle edits through clean direct flags
-
-    syntax.addFlag(kReloadShortFlag, kReloadLongFlag, MSyntax::kNoArg);
-    syntax.addFlag(kIntensityShortFlag, kIntensityLongFlag, MSyntax::kDouble);
-    syntax.addFlag(kGlowTrailShortFlag, kGlowTrailLongFlag, MSyntax::kDouble);
-    syntax.addFlag(kBloomShortFlag, kBloomLongFlag, MSyntax::kLong);
-
     return syntax;
 }
 
 MStatus viewRenderOverridePostColorCmd::doIt(const MArgList& args)
 {
-    MStatus status;
+    MStatus status = MStatus::kFailure;
 
-    MArgDatabase argData(syntax(), args, &status);
-    if (!status) {
-        MGlobal::displayError("Failed to parse command line arguments.");
+    MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
+    if (!renderer)
+    {
+        MGlobal::displayError("VP2 renderer not active.");
         return status;
     }
 
-    MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
-    if (!renderer) return MStatus::kFailure;
-
-    const MHWRender::MRenderOverride* baseOverride = renderer->findRenderOverride("ColorPostProcessOverride");
-    if (!baseOverride) {
-        MGlobal::displayError("ColorPostProcessOverride pipeline is not active.");
-        return MStatus::kFailure;
-    }
-
-    ColorPostProcessOverride* ourOverride = const_cast<ColorPostProcessOverride*>(dynamic_cast<const ColorPostProcessOverride*>(baseOverride));
-    if (!ourOverride) return MStatus::kFailure;
-
-    // Grab a pointer to the first custom post pass to extract values during queries
-    PostQuadRender* firstOp = nullptr;
-    if (!ourOverride->mOwnedOperations.empty()) {
-        // Skip index 0 (Grayscale), grab target bloom operation
-        firstOp = dynamic_cast<PostQuadRender*>(ourOverride->mOwnedOperations[1]);
-    }
-
-    // --- 1. HANDLE QUERY MODE (postColor -q ...) ---
-    if (argData.isQuery())
+    ColorPostProcessOverride* postColorOverride = (ColorPostProcessOverride*)renderer->findRenderOverride("ColorPostProcessOverride");
+    if (postColorOverride == NULL)
     {
-        if (!firstOp) return MStatus::kFailure;
-
-        if (argData.isFlagSet(kIntensityLongFlag)) {
-            setResult(firstOp->intensity());
-            return MStatus::kSuccess;
-        }
-        if (argData.isFlagSet(kGlowTrailLongFlag)) {
-            setResult(firstOp->glowTrail());
-            return MStatus::kSuccess;
-        }
-        if (argData.isFlagSet(kBloomLongFlag)) {
-            // Check if the bloom operation pass is enabled in Viewport 2.0 graph
-            setResult(firstOp->enabled());
-            return MStatus::kSuccess;
-        }
-
-        MGlobal::displayError("Invalid query flag specified.");
-        return MStatus::kFailure;
+        MGlobal::displayError("ColorPostProcessOverride is not registered.");
+        return status;
     }
 
-    // --- 2. HANDLE EDIT / COMMAND INVOCATIONS ---
-    if (argData.isFlagSet(kReloadLongFlag))
+    MArgDatabase argData(syntax(), args, &status);
+    if (!status) return status;
+
+    // --- HANDLE RELOAD FLAG ---
+    if (argData.isFlagSet(kReloadFlag))
     {
-        ourOverride->triggerShaderReload();
-        return MStatus::kSuccess;
+        int gIndex = postColorOverride->mOperations.indexOf(ColorPostProcessOverride::kGrayscalePassName);
+        if (gIndex != -1)
+        {
+            PostQuadRender* quadOp = (PostQuadRender*)postColorOverride->mOperations[gIndex];
+            if (quadOp) quadOp->releaseCustomShader();
+        }
+
+        int bIndex = postColorOverride->mOperations.indexOf(ColorPostProcessOverride::kBloomPassName);
+        if (bIndex != -1)
+        {
+            PostQuadRender* quadOp = (PostQuadRender*)postColorOverride->mOperations[bIndex];
+            if (quadOp) quadOp->releaseCustomShader();
+        }
+        MGlobal::displayInfo("Post-processing shader cache cleared. Recompiling next frame...");
     }
 
-    bool explicitUpdate = false;
+    bool isQuery = argData.isQuery();
 
-    // Loop through operations to apply edit updates cleanly
-    for (auto op : ourOverride->mOwnedOperations) {
-        PostQuadRender* quadOp = dynamic_cast<PostQuadRender*>(op);
-        if (!quadOp) continue;
-
-        if (argData.isFlagSet(kIntensityLongFlag)) {
-            double val;
-            argData.getFlagArgument(kIntensityLongFlag, 0, val);
-            quadOp->setIntensity((float)val);
-            explicitUpdate = true;
-        }
-        if (argData.isFlagSet(kGlowTrailLongFlag)) {
-            double val;
-            argData.getFlagArgument(kGlowTrailLongFlag, 0, val);
-            quadOp->setGlowTrail((float)val);
-            explicitUpdate = true;
-        }
-        if (argData.isFlagSet(kBloomLongFlag)) {
-            int state = 1; // FIXED: Uses matching type signature for MArgDatabase
-            argData.getFlagArgument(kBloomLongFlag, 0, state);
-
-            if (quadOp->name() != ColorPostProcessOverride::kFinalCompositePassName &&
-                quadOp->name() != ColorPostProcessOverride::kGrayscalePassName) {
-                quadOp->setEnabled(state != 0);
+    // --- HANDLE GRAYSCALE FLAG ---
+    if (argData.isFlagSet(kGrayscaleFlag))
+    {
+        int index = postColorOverride->mOperations.indexOf(ColorPostProcessOverride::kGrayscalePassName);
+        if (index != -1)
+        {
+            if (isQuery)
+            {
+                MPxCommand::setResult(postColorOverride->mOperations[index]->enabled());
             }
-            explicitUpdate = true;
+            else
+            {
+                argData.getFlagArgument(kGrayscaleFlag, 0, grayscaleState);
+                postColorOverride->mOperations[index]->setEnabled(grayscaleState);
+            }
         }
     }
 
-    if (explicitUpdate) {
-        MGlobal::executeCommand("refresh -f");
+    // --- HANDLE BLOOM FLAG ---
+    if (argData.isFlagSet(kBloomFlag))
+    {
+        int index = postColorOverride->mOperations.indexOf(ColorPostProcessOverride::kBloomPassName);
+        if (index != -1)
+        {
+            if (isQuery)
+            {
+                MPxCommand::setResult(postColorOverride->mOperations[index]->enabled());
+            }
+            else
+            {
+                argData.getFlagArgument(kBloomFlag, 0, bloomState);
+                postColorOverride->mOperations[index]->setEnabled(bloomState);
+            }
+        }
+    }
+
+    M3dView view = M3dView::active3dView(&status);
+    if (status)
+    {
+        view.refresh(false, true);
     }
 
     return MStatus::kSuccess;

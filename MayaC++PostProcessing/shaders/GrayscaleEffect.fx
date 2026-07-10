@@ -36,7 +36,6 @@ float4 PS_Grayscale(VS_Output input) : SV_Target {
     float gray = dot(color.rgb, float3(0.299, 0.587, 0.114));
     
     return float4(gray, gray, gray, color.a);
-    // return float4(1.0, 0.0, 0.0, 1.0);
 }
 
 technique11 GrayscaleTech {
